@@ -158,6 +158,27 @@ PDF files are stored in `data/generated_reports/`.
 5. Download or permanently delete a report.
 6. To send mail, enter a recipient Gmail address and confirm.
 
+## Streamlit Community Cloud
+
+Deploy `app.py` as the main Streamlit file.
+
+In Streamlit Cloud, open **App settings → Secrets** and add:
+
+```toml
+GROQ_MODEL = "openai/gpt-oss-120b"
+GROQ_API_KEY = "your_groq_api_key"
+SENDER_EMAIL = "your_gmail_address@gmail.com"
+EMAIL_APP_PASSWORD = "your_16_character_gmail_app_password"
+DATABASE_URL = "postgresql://username:password@host/database?sslmode=require"
+DEMO_EMPLOYEE_PASSWORD = "employee123"
+EMPLOYER_EMAIL = "your_employer_email@gmail.com"
+EMPLOYER_PASSWORD = "your_employer_password"
+```
+
+Streamlit secrets are separate from `.env` and must never be committed to Git.
+Use the Neon pooled `DATABASE_URL` for web queries. PDFs and SQLite data are
+temporary on Streamlit Cloud unless moved to persistent object storage.
+
 ## Troubleshooting
 
 - If the UI cannot reach the API, confirm port `8000` is running.
