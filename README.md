@@ -179,6 +179,42 @@ Streamlit secrets are separate from `.env` and must never be committed to Git.
 Use the Neon pooled `DATABASE_URL` for web queries. PDFs and SQLite data are
 temporary on Streamlit Cloud unless moved to persistent object storage.
 
+## Vercel deployment
+
+Deploy the FastAPI backend separately on Render or Railway first. Vercel should
+host `frontend/` only.
+
+In Vercel:
+
+1. Import the GitHub repository.
+2. Set **Root Directory** to `frontend`.
+3. Set **Framework Preset** to Vite.
+4. Set **Build Command** to `npm run build`.
+5. Set **Output Directory** to `dist`.
+6. Add this environment variable:
+
+```text
+VITE_API_URL=https://your-fastapi-service.example.com
+```
+
+Do not append `/api`; the frontend adds `/api` automatically.
+
+On the FastAPI backend, set:
+
+```text
+FRONTEND_URL=https://your-app.vercel.app
+DATABASE_URL=your_neon_connection_string
+SENDER_EMAIL=your_gmail_address@gmail.com
+EMAIL_APP_PASSWORD=your_gmail_app_password
+GROQ_API_KEY=your_groq_api_key
+EMPLOYER_EMAIL=your_employer_email@gmail.com
+EMPLOYER_PASSWORD=your_employer_password
+DEMO_EMPLOYEE_PASSWORD=employee123
+```
+
+After deploying the backend, add its HTTPS URL as `VITE_API_URL` in Vercel,
+redeploy the frontend, and test login before share-time.
+
 ## Troubleshooting
 
 - If the UI cannot reach the API, confirm port `8000` is running.

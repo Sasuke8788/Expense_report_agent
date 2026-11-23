@@ -13,7 +13,17 @@ from tools import send_confirmed_email
 
 ROOT=Path(__file__).resolve().parent
 app=FastAPI(title="Autonomous Expense Report Agent API",version="1.0")
-app.add_middleware(CORSMiddleware,allow_origins=["http://localhost:5173","http://127.0.0.1:5173"],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
+allowed_origins=[
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+if os.getenv("FRONTEND_URL"):
+    allowed_origins.extend([
+        origin.strip().rstrip("/")
+        for origin in os.getenv("FRONTEND_URL","").split(",")
+        if origin.strip()
+    ])
+app.add_middleware(CORSMiddleware,allow_origins=allowed_origins,allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
 
 class GenerateRequest(BaseModel):
     employee_name: str = Field(min_length=2)
