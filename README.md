@@ -69,7 +69,8 @@ Real email delivery requires:
 4. The 16-character App Password in `EMAIL_APP_PASSWORD`
 5. A recipient entered as `name@gmail.com` in the send popup
 
-Do not use the normal Gmail sign-in password.
+Do not use the normal Gmail sign-in password. Gmail App Password values may
+include spaces in `.env` or Render; the application removes them before login.
 
 ## Start locally
 
