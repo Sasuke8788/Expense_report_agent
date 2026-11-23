@@ -10,6 +10,7 @@ import analysis_agent
 import database
 from expense_agent import expense_graph, make_initial_state
 from tools import send_confirmed_email
+from tools import generate_pdf
 
 ROOT=Path(__file__).resolve().parent
 app=FastAPI(title="Autonomous Expense Report Agent API",version="1.0")
@@ -73,6 +74,35 @@ def current_employee(authorization: str | None = Header(default=None)):
 
 def report_safe(r):
     x=dict(r); x.pop("pdf_path",None); return x
+
+def ensure_report_pdf(report):
+    path=Path(report["pdf_path"])
+    if path.exists():
+        return path
+    records=database.get_expenses(report["employee_name"], report["target_month"])
+    totals={}
+    for record in records:
+        if record.get("amount") is not None:
+            category=record.get("category") or "Other"
+            totals[category]=totals.get(category,0)+float(record["amount"])
+    grand_total=sum(totals.values())
+    missing=[]
+    for record in records:
+        problems=[]
+        if record.get("amount") is None:
+            problems.append("missing amount")
+        if not record.get("receipt_id"):
+            problems.append("missing receipt / supporting document ID")
+        if problems:
+            missing.append(f"{record.get('vendor','Expense')} ({record.get('date','date unavailable')}): {', '.join(problems)}")
+    return Path(generate_pdf(
+        report["employee_name"],
+        report["target_month"],
+        totals,
+        grand_total,
+        "\n".join(missing),
+        str(path.parent),
+    ))
 
 @app.get("/api/health")
 def health(): return {"status":"ok"}
@@ -173,8 +203,12 @@ def download(report_id:int, authorization: str | None = Header(default=None), to
     r=database.get_report(report_id)
     if not r or (role != "employer" and r["employee_name"].lower() != session_name.lower()):
         raise HTTPException(404,"Generated report not found.")
-    path=Path(r["pdf_path"])
-    if not path.exists(): raise HTTPException(404,"PDF file is missing from disk.")
+    try:
+        path=ensure_report_pdf(r)
+    except Exception as exc:
+        raise HTTPException(500,f"Could not restore the PDF: {exc}")
+    if not path.exists(): raise HTTPException(404,"PDF file could not be restored.")
+    database.save_report_pdf_path(report_id, str(path))
     return FileResponse(path,media_type="application/pdf",filename=path.name)
 
 @app.post("/api/reports/{report_id}/send")
@@ -188,7 +222,14 @@ def send(report_id:int,payload:SendRequest, authorization: str | None = Header(d
     import re
     if not re.fullmatch(r"[a-z0-9._%+-]+@gmail\.com", receiver):
         raise HTTPException(400, "Enter a valid @gmail.com recipient email address.")
-    result=send_confirmed_email(receiver,r["pdf_path"],r["employee_name"],r["target_month"],payload.demo_mode)
+    try:
+        pdf_path=ensure_report_pdf(r)
+    except Exception as exc:
+        raise HTTPException(500,f"Could not restore the PDF: {exc}")
+    if not pdf_path.exists():
+        raise HTTPException(500,"PDF file could not be restored.")
+    database.save_report_pdf_path(report_id, str(pdf_path))
+    result=send_confirmed_email(receiver,str(pdf_path),r["employee_name"],r["target_month"],payload.demo_mode)
     status=result.get("status","failed")
     database.set_email_status(report_id, "Sent" if status=="sent" else ("Simulated" if status=="simulated" else "Send Failed"))
     return {"status":status,"message":result["message"]}

@@ -419,6 +419,13 @@ def set_email_status(report_id: int, status: str):
             "id": int(report_id),
         })
 
+def save_report_pdf_path(report_id: int, pdf_path: str):
+    with connect() as c:
+        c.execute(text("UPDATE reports SET pdf_path = :pdf_path WHERE id = :id"), {
+            "pdf_path": pdf_path,
+            "id": int(report_id),
+        })
+
 def authenticate_employee(employee_name: str, password: str):
     with connect() as c:
         row = c.execute(text("""
