@@ -181,8 +181,51 @@ temporary on Streamlit Cloud unless moved to persistent object storage.
 
 ## Vercel deployment
 
-Deploy the FastAPI backend separately on Render or Railway first. Vercel should
-host `frontend/` only.
+The deployed React frontend is:
+
+```text
+https://expense-report-agent-sigma.vercel.app
+```
+
+The FastAPI backend must be deployed separately on Render or Railway. Vercel
+hosts `frontend/` only.
+
+### Deploy FastAPI on Render
+
+Create a Render **Web Service** from this repository and use:
+
+- Branch: `main`
+- Root Directory: leave blank
+- Runtime: `Python 3`
+- Build Command: `pip install -r requirements.txt`
+- Start Command: `python -m uvicorn api:app --host 0.0.0.0 --port $PORT`
+- Health Check Path: `/api/health`
+
+Add the following variables in Render:
+
+```text
+DATABASE_URL=your_neon_connection_string
+SENDER_EMAIL=your_gmail_address@gmail.com
+EMAIL_APP_PASSWORD=your_16_character_gmail_app_password
+GROQ_MODEL=openai/gpt-oss-120b
+GROQ_API_KEY=your_groq_api_key
+DEMO_EMPLOYEE_PASSWORD=employee123
+EMPLOYER_EMAIL=your_employer_email
+EMPLOYER_PASSWORD=your_employer_password
+FRONTEND_URL=https://expense-report-agent-sigma.vercel.app
+```
+
+After the Render service deploys, copy its public HTTPS URL, for example:
+
+```text
+https://your-service-name.onrender.com
+```
+
+Verify it at:
+
+```text
+https://your-service-name.onrender.com/api/health
+```
 
 In Vercel:
 
@@ -194,29 +237,22 @@ In Vercel:
 6. Add this environment variable:
 
 ```text
-VITE_API_URL=https://your-fastapi-service.example.com
+VITE_API_URL=https://your-service-name.onrender.com
 ```
 
 Do not append `/api`; the frontend adds `/api` automatically.
-
-On the FastAPI backend, set:
-
-```text
-FRONTEND_URL=https://your-app.vercel.app
-DATABASE_URL=your_neon_connection_string
-SENDER_EMAIL=your_gmail_address@gmail.com
-EMAIL_APP_PASSWORD=your_gmail_app_password
-GROQ_API_KEY=your_groq_api_key
-EMPLOYER_EMAIL=your_employer_email@gmail.com
-EMPLOYER_PASSWORD=your_employer_password
-DEMO_EMPLOYEE_PASSWORD=employee123
-```
 
 After deploying the backend, add its HTTPS URL as `VITE_API_URL` in Vercel,
 redeploy the frontend, and test login before share-time.
 
 ## Troubleshooting
 
+- For the deployed app, open `https://expense-report-agent-sigma.vercel.app`.
+- If login or data fails, check `/api/health` on the Render backend.
+- If browser requests are blocked, verify Render `FRONTEND_URL` exactly matches
+  `https://expense-report-agent-sigma.vercel.app` with no trailing slash.
+- If Vercel shows the localhost API or cannot connect, update
+  `VITE_API_URL` and redeploy Vercel.
 - If the UI cannot reach the API, confirm port `8000` is running.
 - If port `8000` or `5173` is occupied, stop the existing process or change
   the port.
