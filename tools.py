@@ -15,12 +15,17 @@ which is a handy thing to demonstrate in a viva.
 
 import os
 import smtplib
+from pathlib import Path
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from fpdf import FPDF
+from dotenv import load_dotenv
+
+ROOT = Path(__file__).resolve().parent
+load_dotenv(ROOT / ".env")
 
 # ---------------------------------------------------------------------------
 # 1. SIMULATED LOCAL DATABASE
@@ -140,13 +145,25 @@ def send_expense_email(
     finishes gracefully instead of crashing Streamlit. The returned dict
     tells the UI exactly what happened either way.
     """
-    sender_email = os.getenv("SENDER_EMAIL")
-    app_password = os.getenv("EMAIL_APP_PASSWORD")
+    sender_email = os.getenv("SENDER_EMAIL", "").strip()
+    app_password = os.getenv("EMAIL_APP_PASSWORD", "").replace(" ", "").strip()
 
-    if not sender_email or not app_password:
+    if not sender_email or not app_password or "your_" in sender_email or "your_" in app_password:
         return {
             "success": False,
             "message": "SENDER_EMAIL / EMAIL_APP_PASSWORD not set in .env — email not sent.",
+        }
+
+    if not sender_email.lower().endswith("@gmail.com"):
+        return {
+            "success": False,
+            "message": "SENDER_EMAIL must be a Gmail address.",
+        }
+
+    if len(app_password) != 16:
+        return {
+            "success": False,
+            "message": "EMAIL_APP_PASSWORD must be a 16-character Gmail App Password. Do not use the normal account password.",
         }
 
     try:
@@ -182,7 +199,22 @@ def send_expense_email(
 
         return {"success": True, "message": f"Email sent to {receiver_email}."}
 
-    except Exception as exc:  # noqa: BLE001 — intentionally broad for demo safety
+    except smtplib.SMTPAuthenticationError as exc:
+        return {
+            "success": False,
+            "message": "Gmail rejected the credentials. Enable 2-Step Verification and generate a 16-character Gmail App Password.",
+        }
+    except smtplib.SMTPRecipientsRefused:
+        return {
+            "success": False,
+            "message": "Gmail rejected the recipient address.",
+        }
+    except (smtplib.SMTPServerDisconnected, TimeoutError, OSError) as exc:
+        return {
+            "success": False,
+            "message": f"Gmail SMTP could not be reached: {exc}",
+        }
+    except Exception as exc:
         return {"success": False, "message": f"Email send failed: {exc}"}
 
 

@@ -19,3 +19,7 @@ python-dotenv>=1.0.0        # loads GROQ_API_KEY / SENDER_EMAIL / etc. from .env
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.8.0
+
+# Database
+SQLAlchemy>=2.0.36
+psycopg[binary]>=3.2.3

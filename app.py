@@ -15,6 +15,7 @@ Nothing is emailed automatically: sending always needs an explicit confirm.
 """
 
 import os
+import re
 from datetime import date
 from html import escape
 
@@ -63,13 +64,10 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-c1, c2, c3, c4 = st.columns([1.2, 1, 1.5, 1.1], gap="medium")
+c1, c2, c3 = st.columns([1.2, 1, 1.5], gap="medium")
 employee = c1.text_input("Employee name", value="Aditi Sharma")
 month_date = c2.date_input("Target month", value=date(2026, 7, 1))
-receiver = c3.text_input("Finance email (receiver)", value=os.getenv("RECEIVER_EMAIL", "finance@example.com"))
-with c4:
-    st.markdown("<div style='height:1.9rem'></div>", unsafe_allow_html=True)
-    demo = st.toggle("Demo mode (offline)", value=not has_key, key="demo_toggle",
+demo = c3.toggle("Demo mode (offline)", value=not has_key, key="demo_toggle",
                      help="Offline rule-based assistant, keyword categorizer, simulated email. "
                           "Turn off to use the Groq LLM (needs GROQ_API_KEY).")
 if not demo and not has_key:
@@ -80,6 +78,7 @@ month = month_date.strftime("%Y-%m")
 # ---------------------------------------------------------------------------
 # SESSION MEMORY (lives in st.session_state for the whole browser session)
 # ---------------------------------------------------------------------------
+receiver = ""
 if "chat" not in st.session_state:
     st.session_state.chat = new_session(employee, month, receiver, demo)
     st.session_state.display = []      # chat bubbles shown on screen: {"role", "text"}
@@ -120,16 +119,30 @@ def email_confirm_box(where: str):
     if not session["awaiting_email"]:
         return
     rep = session["report"]
+    recipient = st.text_input(
+        "Recipient Gmail address",
+        value=session.get("email_recipient", ""),
+        placeholder="name@gmail.com",
+        key=f"recipient_{where}",
+    )
+    session["email_recipient"] = recipient
+    valid_recipient = bool(re.fullmatch(r"[a-z0-9._%+-]+@gmail\.com", recipient.strip().lower()))
+    if recipient and not valid_recipient:
+        st.error("Enter a valid @gmail.com recipient address.")
+    if valid_recipient:
+        rep["receiver_email"] = recipient.strip().lower()
+        session["receiver"] = recipient.strip().lower()
     st.markdown(
         f'<div class="panel warn">🔒 <b>Confirmation required</b><br>Send <code>{escape(os.path.basename(rep["pdf_path"]))}</code> '
-        f'to <b>{escape(rep["receiver_email"])}</b>? Nothing is sent until you confirm.</div>',
+        f'to <b>{escape(rep.get("receiver_email", "")) or "the recipient entered above"}</b>? Nothing is sent until you confirm.</div>',
         unsafe_allow_html=True)
 
     def act(confirm: bool):
         st.session_state.display.append({"role": "assistant", "text": email_button(session, confirm)})
 
     b1, b2 = st.columns(2)
-    b1.button("✅ Confirm & send email", key=f"confirm_{where}", type="primary", on_click=act, args=(True,))
+    b1.button("✅ Confirm & send email", key=f"confirm_{where}", type="primary",
+              disabled=not valid_recipient, on_click=act, args=(True,))
     b2.button("Cancel", key=f"cancel_{where}", on_click=act, args=(False,))
 
 
@@ -285,10 +298,10 @@ def page_report():
         result_box = st.container(border=True)
 
     if run_clicked:
-        if not employee.strip() or not receiver.strip():
-            st.error("Please fill in the employee name and receiver email.")
+        if not employee.strip():
+            st.error("Please fill in the employee name.")
             st.stop()
-        state = make_initial_state(employee, month, receiver, demo)
+        state = make_initial_state(employee, month, "", demo)
         lines = []
         with trace_box:
             placeholder = st.empty()

@@ -1,0 +1,12 @@
+{
+  "name": "expense-report-agent",
+  "private": true,
+  "scripts": {
+    "start": "start-app.bat",
+    "backend": "start-backend.bat"
+  },
+  "dependencies": {
+    "@neon/config": "^1.14.6",
+    "@neon/env": "^2.1.9"
+  }
+}

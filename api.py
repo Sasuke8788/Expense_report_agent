@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -18,7 +18,6 @@ app.add_middleware(CORSMiddleware,allow_origins=["http://localhost:5173","http:/
 class GenerateRequest(BaseModel):
     employee_name: str = Field(min_length=2)
     target_month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
-    receiver_email: str = "finance@example.com"
     demo_mode: bool = True
 
 class ExpenseChange(BaseModel):
@@ -29,10 +28,11 @@ class ExpenseChange(BaseModel):
 
 class ReviewRequest(BaseModel):
     changes: list[ExpenseChange]
+    employee_name: str | None = None
 
 class SendRequest(BaseModel):
     confirmed: bool
-    receiver_email: str = "anindita.sanjagiri@gmail.com"
+    receiver_email: str = Field(min_length=3)
     demo_mode: bool = False
 
 class ChatRequest(BaseModel):
@@ -41,23 +41,67 @@ class ChatRequest(BaseModel):
     target_month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
     history: list[dict] = []
 
+class LoginRequest(BaseModel):
+    employee_name: str = Field(min_length=2)
+    password: str = Field(min_length=1)
+
+def current_employee(authorization: str | None = Header(default=None)):
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(401, "Please log in.")
+    token = authorization.split(" ", 1)[1].strip()
+    session = database.get_session_employee(token)
+    if not session:
+        raise HTTPException(401, "Session expired. Please log in again.")
+    return session
+
 def report_safe(r):
     x=dict(r); x.pop("pdf_path",None); return x
 
 @app.get("/api/health")
 def health(): return {"status":"ok"}
 
+@app.post("/api/auth/login")
+def login(payload: LoginRequest):
+    employee = database.authenticate_employee(payload.employee_name, payload.password)
+    if not employee:
+        raise HTTPException(401, "Invalid employee name or password.")
+    token = database.create_session(employee["name"], employee["role"])
+    return {"token": token, "employee": employee}
+
+@app.post("/api/auth/logout")
+def logout(authorization: str | None = Header(default=None)):
+    if authorization and authorization.lower().startswith("bearer "):
+        database.delete_session(authorization.split(" ", 1)[1].strip())
+    return {"status":"logged_out"}
+
+@app.get("/api/auth/me")
+def me(authorization: str | None = Header(default=None)):
+    employee_name, role = current_employee(authorization)
+    if role == "employer":
+        return {"name": employee_name, "role": role, "email": "ankitharwalkar12@gmail.com"}
+    return next((dict(e, role="employee") for e in database.employees() if e["name"].lower() == employee_name.lower()), None)
+
 @app.get("/api/employees")
-def get_employees(): return database.employees()
+def get_employees(authorization: str | None = Header(default=None)):
+    employee_name, role = current_employee(authorization)
+    if role == "employer":
+        return database.employees()
+    return [e for e in database.employees() if e["name"].lower() == employee_name.lower()]
 
 @app.get("/api/expenses")
-def expenses(employee_name: str, target_month: str):
+def expenses(employee_name: str, target_month: str, authorization: str | None = Header(default=None)):
+    session_name, role = current_employee(authorization)
+    if role != "employer":
+        employee_name = session_name
     return {"employee_name":employee_name,"target_month":target_month,
             "records":database.get_expenses(employee_name,target_month),
             "available_months":database.available_months(employee_name)}
 
 @app.get("/api/dashboard")
-def dashboard(employee_name: str, target_month: str):
+def dashboard(employee_name: str, target_month: str, authorization: str | None = Header(default=None)):
+    session_name, role = current_employee(authorization)
+    if role != "employer":
+        employee_name = session_name
     records=database.get_expenses(employee_name,target_month)
     if not records: return {"employee_name":employee_name,"target_month":target_month,"count":0,"total_amount":0,"category_totals":{},"flagged":[]}
     req={"sender":"API","receiver":analysis_agent.NAME,"task":"analyze_expenses","expenses":records}
@@ -65,25 +109,37 @@ def dashboard(employee_name: str, target_month: str):
     return {"employee_name":employee_name,"target_month":target_month,**findings}
 
 @app.post("/api/expenses/review")
-def review(payload: ReviewRequest):
+def review(payload: ReviewRequest, authorization: str | None = Header(default=None)):
+    employee_name, role = current_employee(authorization)
     try:
-        updated=database.update_expenses([x.model_dump() for x in payload.changes])
+        if role == "employer" and payload.employee_name:
+            employee_name = payload.employee_name
+        else:
+            session_name, _ = current_employee(authorization)
+            employee_name = session_name
+        updated=database.update_expenses([x.model_dump() for x in payload.changes], employee_name)
     except (ValueError,KeyError) as e:
         raise HTTPException(400,str(e))
     return {"updated_ids":updated,"message":"Changes saved."}
 
 @app.get("/api/reports")
-def reports(employee_name: Optional[str]=None):
-    return [report_safe(r) for r in database.list_reports(employee_name)]
+def reports(employee_name: Optional[str]=None, authorization: str | None = Header(default=None)):
+    session_name, role = current_employee(authorization)
+    if role == "employer":
+        return [report_safe(r) for r in database.list_reports(employee_name)]
+    return [report_safe(r) for r in database.list_reports(session_name)]
 
 @app.post("/api/reports/generate")
-def generate(payload: GenerateRequest):
+def generate(payload: GenerateRequest, authorization: str | None = Header(default=None)):
+    session_name, role = current_employee(authorization)
+    if role != "employer":
+        payload.employee_name = session_name
     records=database.get_expenses(payload.employee_name,payload.target_month)
     if not records:
         raise HTTPException(404,"There is no expense data for this employee for the selected month. No report was generated.")
     # Generate report via the original LangGraph workflow. It never sends automatically.
     try:
-        state=expense_graph.invoke(make_initial_state(payload.employee_name,payload.target_month,payload.receiver_email,payload.demo_mode))
+        state=expense_graph.invoke(make_initial_state(payload.employee_name,payload.target_month,"",payload.demo_mode))
     except Exception as e:
         raise HTTPException(500,f"Report generation failed: {e}")
     if not state.get("pdf_path") or not Path(state["pdf_path"]).exists():
@@ -95,30 +151,47 @@ def generate(payload: GenerateRequest):
     return saved
 
 @app.get("/api/reports/{report_id}/download")
-def download(report_id:int):
+def download(report_id:int, authorization: str | None = Header(default=None), token: str | None = Query(default=None)):
+    session_name, role = current_employee(authorization or ("Bearer "+token if token else None))
     r=database.get_report(report_id)
-    if not r: raise HTTPException(404,"Generated report not found.")
+    if not r or (role != "employer" and r["employee_name"].lower() != session_name.lower()):
+        raise HTTPException(404,"Generated report not found.")
     path=Path(r["pdf_path"])
     if not path.exists(): raise HTTPException(404,"PDF file is missing from disk.")
     return FileResponse(path,media_type="application/pdf",filename=path.name)
 
 @app.post("/api/reports/{report_id}/send")
-def send(report_id:int,payload:SendRequest):
+def send(report_id:int,payload:SendRequest, authorization: str | None = Header(default=None)):
+    session_name, role = current_employee(authorization)
     r=database.get_report(report_id)
-    if not r: raise HTTPException(404,"No generated report exists for this employee and month.")
+    if not r or (role != "employer" and r["employee_name"].lower() != session_name.lower()):
+        raise HTTPException(404,"No generated report exists for this employee and month.")
     if not payload.confirmed: return {"status":"cancelled","message":"Email was not sent."}
-    employee=next((x for x in database.employees() if x["name"].lower()==r["employee_name"].lower()),None)
-    receiver=payload.receiver_email.strip() or os.getenv("RECEIVER_EMAIL", "anindita.sanjagiri@gmail.com")
-    if "@" not in receiver:
-        raise HTTPException(400, "Enter a valid recipient email address.")
+    receiver=payload.receiver_email.strip().lower()
+    import re
+    if not re.fullmatch(r"[a-z0-9._%+-]+@gmail\.com", receiver):
+        raise HTTPException(400, "Enter a valid @gmail.com recipient email address.")
     result=send_confirmed_email(receiver,r["pdf_path"],r["employee_name"],r["target_month"],payload.demo_mode)
     status=result.get("status","failed")
     database.set_email_status(report_id, "Sent" if status=="sent" else ("Simulated" if status=="simulated" else "Send Failed"))
     return {"status":status,"message":result["message"]}
 
+@app.delete("/api/reports/{report_id}")
+def delete_report(report_id:int, authorization: str | None = Header(default=None)):
+    session_name, role = current_employee(authorization)
+    report = database.get_report(report_id)
+    if not report or (role != "employer" and report["employee_name"].lower() != session_name.lower()):
+        raise HTTPException(404, "Report not found.")
+    if not database.delete_report(report_id, report["employee_name"]):
+        raise HTTPException(404, "Report not found.")
+    return {"status":"deleted","report_id":report_id}
+
 @app.post("/api/chat")
-def chat(payload: ChatRequest):
+def chat(payload: ChatRequest, authorization: str | None = Header(default=None)):
     """Interpret requests with the LLM; execute only validated, confirmed actions."""
+    session_name, role = current_employee(authorization)
+    if role != "employer":
+        payload.employee_name = session_name
     import json, re, calendar
     from datetime import datetime
     from expense_agent import llm
@@ -165,7 +238,7 @@ def chat(payload: ChatRequest):
         if not records:
             return {"intent": "question", "message": f"There are no expense records for {emp} in {mon}. I did not generate a report.", "employee_name": emp, "target_month": mon}
         try:
-            state = expense_graph.invoke(make_initial_state(emp, mon, os.getenv("RECEIVER_EMAIL", "anindita.sanjagiri@gmail.com"), False))
+            state = expense_graph.invoke(make_initial_state(emp, mon, "", False))
             pdf_path = state.get("pdf_path")
             if not pdf_path or not Path(pdf_path).exists():
                 raise RuntimeError("The report workflow did not create a PDF.")
