@@ -23,7 +23,14 @@ if os.getenv("FRONTEND_URL"):
         for origin in os.getenv("FRONTEND_URL","").split(",")
         if origin.strip()
     ])
-app.add_middleware(CORSMiddleware,allow_origins=allowed_origins,allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"https://([a-z0-9-]+\.)?vercel\.app",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class GenerateRequest(BaseModel):
     employee_name: str = Field(min_length=2)
