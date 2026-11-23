@@ -192,7 +192,7 @@ def send_expense_email(
         )
         message.attach(attachment)
 
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as server:
             server.starttls()  # upgrade the plaintext connection to TLS
             server.login(sender_email, app_password)
             server.send_message(message)
