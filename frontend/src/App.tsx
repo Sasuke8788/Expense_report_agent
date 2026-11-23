@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { LayoutDashboard, FileText, MessageCircle, Wallet, Search, Plus, ChevronDown, AlertTriangle, CheckCircle2, Clock3, Download, Send, ArrowUpRight, Plane, Hotel, Car, Utensils, X, Save, Sparkles, Paperclip, RefreshCw, ShieldCheck, CircleHelp } from 'lucide-react';
 
-const API = 'http://127.0.0.1:8000/api';
+const API_BASE = (import.meta.env.VITE_API_URL || 'https://expense-report-agent-c6lb.onrender.com').replace(/\/$/, '');
+const API = `${API_BASE}/api`;
 type Employee={name:string;department?:string;email:string;role?:'employee'|'employer'};
 type Expense={id:number;employee:string;date:string;vendor:string;description:string;category:string;amount:number|null;receipt_id:string|null;review_note?:string|null};
 type Report={id:number;employee_name:string;target_month:string;version:number;grand_total:number;needs_review:boolean;status:string;email_status:string;created_at:string;download_url?:string;message?:string};
