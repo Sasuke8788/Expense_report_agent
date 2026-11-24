@@ -232,6 +232,7 @@ def send_expense_email(
                 headers={
                     "Authorization": f"Bearer {resend_api_key}",
                     "Content-Type": "application/json",
+                    "User-Agent": "ExpenseFlow/1.0",
                 },
                 method="POST",
             )
