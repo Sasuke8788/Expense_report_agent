@@ -128,10 +128,10 @@ npm run dev
 ```
 
 ## Demo accounts
+The employee list is generated from the Government of Canada travel-expense
+dataset. Every dataset employee uses the `DEMO_EMPLOYEE_PASSWORD` value:
 
-Every seeded employee uses the `DEMO_EMPLOYEE_PASSWORD` value:
-
-- Employee name: for example `Aditi Sharma`
+- Employee name: for example `Aaron McCrorie`
 - Password: `employee123`
 
 The employer account uses `EMPLOYER_EMAIL` and `EMPLOYER_PASSWORD` from `.env`.
@@ -149,6 +149,13 @@ Neon is recommended for deployed or shared use because local SQLite files may
 not persist across managed hosting restarts.
 
 PDF files are stored in `data/generated_reports/`.
+
+Expense records are synchronized from the Government of Canada's open
+`datastore_search` resource
+`8282db2a-878f-475c-af10-ad56aa8fa72c`. The sync runs once when the database
+is empty or still contains the former synthetic employee records. Set
+`FORCE_CANADA_DATASET_SYNC=1` to force a resync, or
+`CANADA_DATASET_ENABLED=0` to disable live synchronization.
 
 ## Core workflow
 

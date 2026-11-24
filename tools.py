@@ -1,20 +1,9 @@
-"""
-tools.py
---------
-The three tools used by the Expense Report Agent graph:
-
-  1. get_mock_expenses()   — a simulated local "database" query
-  2. generate_pdf()        — renders the final report as a real PDF (fpdf2)
-  3. send_expense_email()  — emails that PDF via Gmail SMTP (stdlib only)
-
-Keeping these in their own file (separate from expense_agent.py's graph
-logic) means each tool is a plain, independently testable function — you
-can call any of them from a Python shell with no LangGraph involved at all,
-which is a handy thing to demonstrate in a viva.
-"""
-
 import os
 import smtplib
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from email import encoders
 from email.mime.base import MIMEBase
@@ -41,6 +30,67 @@ load_dotenv(ROOT / ".env")
 # enterprise records by database.py on first startup.
 from database import get_expenses as _db_get_expenses, available_months as _db_available_months
 MOCK_RECEIPTS = []  # retained only for backward-compatible imports
+
+CANADA_DATASTORE_URL = (
+    "https://open.canada.ca/data/api/3/action/datastore_search"
+)
+CANADA_RESOURCE_ID = "8282db2a-878f-475c-af10-ad56aa8fa72c"
+
+
+def fetch_canada_expenses(limit: int = 100, offset: int = 0, query: str = "") -> dict:
+    """Fetch records from the Government of Canada datastore resource."""
+    params = {
+        "resource_id": CANADA_RESOURCE_ID,
+        "limit": max(1, min(int(limit), 1000)),
+        "offset": max(0, int(offset)),
+    }
+
+    request = urllib.request.Request(
+        f"{CANADA_DATASTORE_URL}?{urllib.parse.urlencode(params)}",
+        headers={"Accept": "application/json", "User-Agent": "ExpenseFlow/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")
+        raise RuntimeError(f"Canada datastore returned HTTP {exc.code}: {body[:300]}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Could not reach the Canada datastore: {exc.reason}") from exc
+
+    if not payload.get("success"):
+        raise RuntimeError(payload.get("error", "Canada datastore query failed"))
+
+    result = payload["result"]
+    records = result.get("records", [])
+    if query.strip():
+        needle = query.strip().lower()
+        field = ""
+        if ":" in needle:
+            field, needle = (part.strip() for part in needle.split(":", 1))
+        field_aliases = {
+            "title": ("title_en", "title_fr"),
+            "name": ("name",),
+            "destination": ("destination_en", "destination_fr"),
+        }
+        searchable_fields = field_aliases.get(field)
+        if searchable_fields:
+            records = [
+                record for record in records
+                if any(needle in str(record.get(key) or "").lower() for key in searchable_fields)
+            ]
+        else:
+            records = [
+                record for record in records
+                if any(needle in str(value).lower() for value in record.values())
+            ]
+
+    return {
+        "resource_id": result["resource_id"],
+        "total": result.get("total"),
+        "records": records,
+        "fields": result.get("fields", []),
+    }
 
 
 
@@ -192,10 +242,15 @@ def send_expense_email(
         )
         message.attach(attachment)
 
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as server:
-            server.starttls()  # upgrade the plaintext connection to TLS
-            server.login(sender_email, app_password)
-            server.send_message(message)
+        try:
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as server:
+                server.starttls()
+                server.login(sender_email, app_password)
+                server.send_message(message)
+        except (smtplib.SMTPServerDisconnected, TimeoutError, OSError):
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as server:
+                server.login(sender_email, app_password)
+                server.send_message(message)
 
         return {"success": True, "message": f"Email sent to {receiver_email}."}
 

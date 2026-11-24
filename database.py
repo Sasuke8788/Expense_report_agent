@@ -5,6 +5,10 @@ import hashlib
 import hmac
 import secrets
 import sqlite3
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -46,6 +50,37 @@ VENDORS = [
     ("Barista", "Team meeting refreshments", "Meals", 620),
     ("Meru Cabs", "Office to client site", "Transport", 430),
 ]
+
+CANADA_DATASTORE_URL = "https://open.canada.ca/data/api/3/action/datastore_search"
+CANADA_RESOURCE_ID = "8282db2a-878f-475c-af10-ad56aa8fa72c"
+
+
+def fetch_canada_dataset(max_records: int = 10000) -> list[dict]:
+    records = []
+    offset = 0
+    page_size = 1000
+    while offset < max_records:
+        params = urllib.parse.urlencode({
+            "resource_id": CANADA_RESOURCE_ID,
+            "limit": page_size,
+            "offset": offset,
+        })
+        request = urllib.request.Request(
+            f"{CANADA_DATASTORE_URL}?{params}",
+            headers={"Accept": "application/json", "User-Agent": "ExpenseFlow/1.0"},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if not payload.get("success"):
+            raise RuntimeError(payload.get("error", "Canada datastore query failed"))
+        page = payload["result"].get("records", [])
+        if not page:
+            break
+        records.extend(page)
+        offset += len(page)
+        if len(page) < page_size:
+            break
+    return records[:max_records]
 
 def _make_engine() -> tuple[Engine | None, bool]:
     if IS_POSTGRES:
@@ -207,58 +242,126 @@ def init_db() -> None:
             c.execute(text("ALTER TABLE login_sessions ALTER COLUMN role SET DEFAULT 'employee'"))
 
         employee_count = c.execute(text("SELECT COUNT(*) FROM employees")).scalar_one()
-        if employee_count == 0:
-            c.execute(
-                text("INSERT INTO employees(name, department, email) VALUES (:name, :department, :email)"),
-                [{"name": name, "department": department, "email": email} for name, department, email in EMPLOYEES],
-            )
-
         expense_count = c.execute(text("SELECT COUNT(*) FROM expenses")).scalar_one()
-        if expense_count == 0:
-            rows = []
-            months = [(2026, month) for month in range(1, 10)]
-            eid = 1000
-            for emp_idx, (employee, _department, _email) in enumerate(EMPLOYEES):
-                for year, month in months:
-                    for j in range(4):
-                        vendor, description, category, base = VENDORS[(emp_idx * 2 + j + month) % len(VENDORS)]
-                        day = min(3 + j * 5, 28)
-                        amount = round(base * (0.82 + ((emp_idx + j + month) % 7) * 0.07), 2)
-                        receipt = f"RCPT-{eid}"
-                        if employee == "Aditi Sharma" and month == 7 and j == 2:
-                            amount = None
-                        if employee == "Aditi Sharma" and month == 7 and j == 3:
-                            receipt = None
-                        if employee == "Rohan Mehta" and month == 6 and j == 1:
-                            receipt = None
-                        rows.append({
-                            "employee": employee,
-                            "date": f"{year}-{month:02d}-{day:02d}",
-                            "vendor": vendor,
-                            "description": description,
-                            "category": category,
-                            "amount": amount,
-                            "receipt": receipt,
-                        })
-                        eid += 1
-            c.execute(
-                text("""INSERT INTO expenses
-                    (employee_name, expense_date, vendor, description, category, amount, receipt_id, review_note, updated_at)
-                    VALUES (:employee, :date, :vendor, :description, :category, :amount, :receipt, NULL, NULL)"""),
-                rows,
-            )
+        synthetic_present = c.execute(text(
+            "SELECT COUNT(*) FROM employees WHERE lower(name) IN ('aditi sharma', 'rohan mehta', 'priya nair')"
+        )).scalar_one()
+        canada_sync_needed = (
+            employee_count == 0
+            or expense_count == 0
+            or synthetic_present > 0
+            or os.getenv("FORCE_CANADA_DATASET_SYNC", "0").strip() == "1"
+        )
+        if os.getenv("CANADA_DATASET_ENABLED", "1").strip() != "0" and canada_sync_needed:
+            try:
+                canada_records = fetch_canada_dataset(
+                    max_records=int(os.getenv("CANADA_DATASET_MAX_RECORDS", "5000"))
+                )
+                employees_by_name = {}
+                expense_rows = []
+                category_fields = (
+                    ("airfare", "Flights"),
+                    ("other_transport", "Transport"),
+                    ("lodging", "Lodging"),
+                    ("meals", "Meals"),
+                    ("other_expenses", "Other"),
+                )
+                for record in canada_records:
+                    name = str(record.get("name") or "").strip()
+                    if not name:
+                        continue
+                    title = str(record.get("title_en") or record.get("title_fr") or "Public servant").strip()
+                    department = str(record.get("owner_org_title") or "Government of Canada").strip()
+                    if name not in employees_by_name:
+                        slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in name).strip("-")
+                        slug = "-".join(part for part in slug.split("-") if part)
+                        employees_by_name[name] = {
+                            "name": name,
+                            "department": department,
+                            "email": f"{slug[:80]}@canada-expense.local",
+                        }
 
-        account_count = c.execute(text("SELECT COUNT(*) FROM login_accounts")).scalar_one()
-        if account_count == 0:
-            demo_password = os.getenv("DEMO_EMPLOYEE_PASSWORD", "employee123")
-            password_hash = hashlib.pbkdf2_hmac(
-                "sha256", demo_password.encode(), b"expenseflow-demo-v1", 120_000
-            ).hex()
-            c.execute(
-                text("""INSERT INTO login_accounts(employee_name, password_hash)
-                        SELECT name, :password_hash FROM employees"""),
-                {"password_hash": password_hash},
-            )
+                    expense_date = str(record.get("start_date") or record.get("end_date") or "").strip()[:10]
+                    if not expense_date:
+                        continue
+                    purpose = str(record.get("purpose_en") or record.get("purpose_fr") or "Government travel").strip()
+                    vendor = str(record.get("owner_org_title") or record.get("owner_org") or "Government of Canada").strip()
+                    ref_number = str(record.get("ref_number") or record.get("_id") or "").strip() or None
+                    category_added = False
+                    for field, category in category_fields:
+                        raw_amount = record.get(field)
+                        try:
+                            amount = float(raw_amount) if raw_amount not in (None, "") else None
+                        except (TypeError, ValueError):
+                            amount = None
+                        if amount is not None and amount >= 0:
+                            expense_rows.append({
+                                "employee": name,
+                                "date": expense_date,
+                                "vendor": vendor,
+                                "description": f"{title} - {purpose}",
+                                "category": category,
+                                "amount": amount,
+                                "receipt": ref_number,
+                            })
+                            category_added = True
+                    if not category_added:
+                        raw_total = record.get("total")
+                        try:
+                            amount = float(raw_total) if raw_total not in (None, "") else None
+                        except (TypeError, ValueError):
+                            amount = None
+                        expense_rows.append({
+                            "employee": name,
+                            "date": expense_date,
+                            "vendor": vendor,
+                            "description": f"{title} - {purpose}",
+                            "category": "Other",
+                            "amount": amount,
+                            "receipt": ref_number,
+                        })
+
+                c.execute(text("DELETE FROM expenses"))
+                c.execute(text("DELETE FROM employees"))
+                if employees_by_name:
+                    c.execute(
+                        text("INSERT INTO employees(name, department, email) VALUES (:name, :department, :email)"),
+                        list(employees_by_name.values()),
+                    )
+                if expense_rows:
+                    c.execute(
+                        text("""INSERT INTO expenses
+                            (employee_name, expense_date, vendor, description, category, amount, receipt_id, review_note, updated_at)
+                            VALUES (:employee, :date, :vendor, :description, :category, :amount, :receipt, NULL, NULL)"""),
+                        expense_rows,
+                    )
+
+                demo_password = os.getenv("DEMO_EMPLOYEE_PASSWORD", "employee123")
+                password_hash = hashlib.pbkdf2_hmac(
+                    "sha256", demo_password.encode(), b"expenseflow-demo-v1", 120_000
+                ).hex()
+                c.execute(text("DELETE FROM login_accounts WHERE role = 'employee'"))
+                c.execute(
+                    text("""INSERT INTO login_accounts(employee_name, password_hash, role, email)
+                            VALUES (:name, :password_hash, 'employee', :email)
+                            ON CONFLICT (employee_name) DO UPDATE
+                            SET password_hash = EXCLUDED.password_hash,
+                                role = 'employee',
+                                email = EXCLUDED.email""")
+                    if POSTGRES_AVAILABLE else
+                    text("""INSERT INTO login_accounts(employee_name, password_hash, role, email)
+                            VALUES (:name, :password_hash, 'employee', :email)
+                            ON CONFLICT(employee_name) DO UPDATE SET
+                                password_hash = excluded.password_hash,
+                                role = 'employee',
+                                email = excluded.email"""),
+                    [
+                        {"name": employee["name"], "password_hash": password_hash, "email": employee["email"]}
+                        for employee in employees_by_name.values()
+                    ],
+                )
+            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, RuntimeError) as exc:
+                print(f"Canada dataset sync unavailable: {exc}")
         employer_email = os.getenv("EMPLOYER_EMAIL", "").strip().lower()
         employer_password = os.getenv("EMPLOYER_PASSWORD", "")
         if employer_email and employer_password:

@@ -9,8 +9,7 @@ from pydantic import BaseModel, Field
 import analysis_agent
 import database
 from expense_agent import expense_graph, make_initial_state
-from tools import send_confirmed_email
-from tools import generate_pdf
+from tools import send_confirmed_email, generate_pdf, fetch_canada_expenses
 
 ROOT=Path(__file__).resolve().parent
 app=FastAPI(title="Autonomous Expense Report Agent API",version="1.0")
@@ -105,7 +104,29 @@ def ensure_report_pdf(report):
     ))
 
 @app.get("/api/health")
-def health(): return {"status":"ok"}
+def health():
+    sender = os.getenv("SENDER_EMAIL", "").strip()
+    password = os.getenv("EMAIL_APP_PASSWORD", "").replace(" ", "").strip()
+    return {
+        "status": "ok",
+        "email": {
+            "configured": bool(sender and len(password) == 16),
+            "sender_is_gmail": sender.lower().endswith("@gmail.com"),
+        },
+    }
+
+@app.get("/api/dataset/canada-expenses")
+def canada_expenses(
+    limit: int = 100,
+    offset: int = 0,
+    q: str = "",
+    authorization: str | None = Header(default=None),
+):
+    current_employee(authorization)
+    try:
+        return fetch_canada_expenses(limit=limit, offset=offset, query=q)
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc))
 
 @app.post("/api/auth/login")
 def login(payload: LoginRequest):
