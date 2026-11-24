@@ -1,6 +1,7 @@
 import os
 import smtplib
 import json
+import base64
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -197,6 +198,59 @@ def send_expense_email(
     """
     sender_email = os.getenv("SENDER_EMAIL", "").strip()
     app_password = os.getenv("EMAIL_APP_PASSWORD", "").replace(" ", "").strip()
+    resend_api_key = os.getenv("RESEND_API_KEY", "").strip()
+    resend_from_email = os.getenv("RESEND_FROM_EMAIL", "onboarding@resend.dev").strip()
+
+    if resend_api_key:
+        if not resend_from_email:
+            return {
+                "success": False,
+                "message": "RESEND_FROM_EMAIL is not set.",
+            }
+        try:
+            with open(pdf_path, "rb") as attachment_file:
+                pdf_base64 = base64.b64encode(attachment_file.read()).decode("ascii")
+            payload = {
+                "from": resend_from_email,
+                "to": [receiver_email],
+                "subject": f"Travel Expense Report — {employee_name} — {target_month}",
+                "text": (
+                    "Dear Finance Team,\n\n"
+                    f"Please find attached the travel expense report for {employee_name} for {target_month}.\n\n"
+                    "Please review the attached report and follow the standard expense-processing procedure.\n"
+                    "Any items marked 'Needs Review' require verification of the supporting information.\n\n"
+                    "Kind regards,\nExpense Operations"
+                ),
+                "attachments": [{
+                    "filename": os.path.basename(pdf_path),
+                    "content": pdf_base64,
+                }],
+            }
+            request = urllib.request.Request(
+                "https://api.resend.com/emails",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {resend_api_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=30) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            if result.get("id"):
+                return {"success": True, "message": f"Email sent to {receiver_email}."}
+            return {"success": False, "message": f"Hosted email API rejected the request: {result}"}
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", "replace")
+            return {
+                "success": False,
+                "message": f"Hosted email API returned HTTP {exc.code}: {body[:300]}",
+            }
+        except urllib.error.URLError as exc:
+            return {
+                "success": False,
+                "message": f"Hosted email API could not be reached: {exc.reason}",
+            }
 
     if not sender_email or not app_password or "your_" in sender_email or "your_" in app_password:
         return {
@@ -267,7 +321,12 @@ def send_expense_email(
     except (smtplib.SMTPServerDisconnected, TimeoutError, OSError) as exc:
         return {
             "success": False,
-            "message": f"Gmail SMTP could not be reached: {exc}",
+            "message": (
+                "Gmail SMTP could not be reached from this deployment host "
+                f"(network error: {exc}). Render free web services block outbound "
+                "SMTP ports 25, 465, and 587; upgrade the Render instance or configure "
+                "RESEND_API_KEY for HTTPS email delivery."
+            ),
         }
     except Exception as exc:
         return {"success": False, "message": f"Email send failed: {exc}"}

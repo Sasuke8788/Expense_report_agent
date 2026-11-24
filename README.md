@@ -266,5 +266,9 @@ redeploy the frontend, and test login before share-time.
   the port.
 - If Gmail reports authentication failure, verify 2-Step Verification and use
   a 16-character Gmail App Password.
+- Render free web services block outbound SMTP ports 25, 465, and 587. If the
+  deployed service shows "Network is unreachable", upgrade the Render instance
+  or configure `RESEND_API_KEY` for HTTPS email delivery. `SENDER_EMAIL` must
+  contain a sender address verified by the hosted email provider.
 - If Neon connection fails, verify `DATABASE_URL` and `sslmode=require`.
 - Live Groq features require `GROQ_API_KEY`; demo mode does not.

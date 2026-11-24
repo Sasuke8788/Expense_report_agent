@@ -107,11 +107,14 @@ def ensure_report_pdf(report):
 def health():
     sender = os.getenv("SENDER_EMAIL", "").strip()
     password = os.getenv("EMAIL_APP_PASSWORD", "").replace(" ", "").strip()
+    resend_api_key = os.getenv("RESEND_API_KEY", "").strip()
     return {
         "status": "ok",
         "email": {
             "configured": bool(sender and len(password) == 16),
             "sender_is_gmail": sender.lower().endswith("@gmail.com"),
+            "provider": "resend_https" if resend_api_key else "gmail_smtp",
+            "hosted_api_configured": bool(resend_api_key),
         },
     }
 
